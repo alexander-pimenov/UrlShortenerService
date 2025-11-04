@@ -1,0 +1,85 @@
+server:
+  port: 8181
+
+spring:
+  application:
+    name: url-shortener-service
+  #  настройки для БД
+  datasource:
+    url: jdbc:postgresql://localhost:6532/url_shortener
+    username: postgres
+    password: postgres
+    driver-class-name: org.postgresql.Driver
+    hikari:
+      maximum-pool-size: 10
+      minimum-idle: 5
+      connection-timeout: 30000
+      idle-timeout: 600000
+      max-lifetime: 1800000
+  #  настройки для jpa
+  jpa:
+    database-platform: org.hibernate.dialect.PostgreSQLDialect
+    hibernate:
+      ddl-auto: update
+    properties:
+      hibernate:
+        show-sql: true
+        format_sql: true
+        jdbc:
+          batch_size: 20
+        order_inserts: true
+        order_updates: true
+  #  настройки для redis
+  data:
+    redis:
+      host: localhost
+      port: 6379
+      database: 0
+      password: ""
+      timeout: 3000
+
+  #  настройки для kafka
+  kafka:
+    bootstrap-servers: localhost:9092
+    security:
+      protocol: PLAINTEXT
+    consumer:
+      bootstrap-servers: localhost:9092
+      group-id: url-shortener-consumer-group
+      client-id: url-shortener-client
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+#      value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
+      properties:
+        spring.json.trusted.packages: "*"
+        spring.json.value.default.type: ru.pimal.model.ClickEvent
+#        security.protocol: PLAINTEXT
+    producer:
+      bootstrap-servers: localhost:9092
+      client-id: "url-shortener-producer"
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+#      value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
+      acks: all
+      enable-idempotence: true
+      ssl-provider: none
+      max-in-flight-requests-per-connection: 1
+      properties:
+        spring.json.add.type.headers: false
+#        security.protocol: PLAINTEXT
+  # настройки Jackson для Kotlin
+  jackson:
+    property-naming-strategy: SNAKE_CASE
+    serialization:
+      write-dates-as-timestamps: false
+#Логирование для отладки
+logging:
+  level:
+    org.springframework.web: INFO
+    org.springframework.kafka: DEBUG
+    org.springframework.data.redis: INFO
+    org.hibernate.SQL: DEBUG
+    ru.pimal: INFO
+
+

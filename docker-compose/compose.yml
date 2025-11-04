@@ -1,0 +1,238 @@
+#version: '3.8'
+
+services:
+  ##  ---------- Zookeeper ----------  ##
+  zookeeper:
+    image: docker.io/confluentinc/cp-zookeeper:7.0.1
+    container_name: zookeeper
+    restart: on-failure
+    mem_limit: 300m
+    environment:
+      KAFKA_OPTS: >
+        -Dzookeeper.extendedTypesEnabled=true
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+      ALLOW_ANONYMOUS_LOGIN: "yes"
+      ZOOKEEPER_ADMIN_SERVER_PORT: 8191  # установим новый порт для AdminServer
+    healthcheck:
+      test: [ "CMD", "curl", "-fsSL", "http://zookeeper:8191/commands/ruok" ]
+      #      test: ["CMD", "bash", "-c", "echo ruok | nc zookeeper 2181"] # альтернативный способ
+      interval: 10s
+      timeout: 5s
+      retries: 20
+    ports:
+      - 22181:2181
+    networks:
+      - kafka-postgres-redis-net
+
+  #  ---------- Kafka ----------
+  kafka:
+    image: docker.io/confluentinc/cp-kafka:7.2.0
+    container_name: kafka
+    restart: on-failure
+    mem_limit: 1.5G
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      ALLOW_PLAINTEXT_LISTENER: "yes"
+      ZOOKEEPER_AUTOPURGE_PURGE_INTERVAL: "0"
+      KAFKA_LOG4J_LOGGERS: "kafka.controller=INFO,kafka.producer.async.DefaultEventHandler=INFO,state.change.logger=INFO"
+      KAFKA_ZOOKEEPER_SESSION_TIMEOUT: "40000"
+      #      С такой конфигурацией не работал ,т.е. не подключался к кафке ни продюсер ни консьюмер:
+#      KAFKA_LISTENERS: INSIDE://0.0.0.0:9092,OUTSIDE://0.0.0.0:29092
+#      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+#      KAFKA_ADVERTISED_LISTENERS: INSIDE://kafka:9092,OUTSIDE://localhost:29092
+#      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INSIDE:PLAINTEXT,OUTSIDE:PLAINTEXT
+#      С такой конфигурацией заработал и продюсер и консюмер:
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,PLAINTEXT_HOST://0.0.0.0:29092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092,PLAINTEXT_HOST://kafka:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+#      KAFKA_INTER_BROKER_LISTENER_NAME: INSIDE
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+    volumes:
+      - kafka_data:/var/lib/kafka
+    #      - ./kafka-data:/var/lib/kafka:z # для сохранения данных вариант с host path (если нужен явный контроль)
+    healthcheck:
+      test: [ "CMD-SHELL", "echo 'test-message' | kafka-console-producer --broker-list kafka:9092 --topic health-check-topic && kafka-console-consumer --bootstrap-server kafka:9092 --topic health-check-topic --from-beginning --max-messages 1 | grep 'test-message'" ]
+      #      test: ["CMD", "kafka-topics", "--bootstrap-server", "kafka:9092", "--list"] # альтернативный способ
+      #      test: ["CMD", "nc", "-vz", "kafka", "9092"] # альтернативный способ но может не корректно работать
+      interval: 15s
+      timeout: 10s
+      retries: 3
+    ports:
+      #      - 29092:9092
+      - 9092:9092
+    networks:
+      - kafka-postgres-redis-net
+
+  #  ---------- Kafka-UI ----------
+  kafka-ui:
+    #    image: docker.io/provectuslabs/kafka-ui:latest
+    image: docker.io/provectuslabs/kafka-ui:c00cb320cde844bcefbde8fc2105d65b6e725b93
+    #    docker pull provectuslabs/kafka-ui:1108c760e5f0b23908f3818500b78fe57d44ce71
+    container_name: kafka-ui
+    restart: on-failure
+    mem_limit: 400m
+    depends_on:
+      kafka:
+        condition: service_healthy
+    environment:
+      KAFKA_CLUSTERS_0_NAME: local-kafka
+      #      KAFKA_CLUSTERS_0_BOOTSTRAP_SERVERS: localhost:9092
+      KAFKA_CLUSTERS_0_BOOTSTRAP_SERVERS: kafka:29092
+      KAFKA_CLUSTERS_0_ZOOKEEPER: zookeeper:2181
+      KAFKA_CLUSTER_0_JMXPORT: 9997
+      DYNAMIC_CONFIG_ENABLED: "true"
+    #    так можно запускать, например, на другом порту и с кастомными параметрами, т.к. кафка это Java приложение.
+    #    env_file:
+    #      - ./kafka-ui/JAVA_OPTS
+    ports:
+      - 8078:8080
+    networks:
+      - kafka-postgres-redis-net
+
+  ##  ---------- Еще один Kafka-UI, но, как по мне, он хуже, чем верхний ---------- ##
+#  kafdrop:
+#    image: docker.io/obsidiandynamics/kafdrop:latest
+#    container_name: kafdrop
+#    depends_on:
+#      kafka:
+#        condition: service_healthy
+#    ports:
+#      - 9000:9000
+#    environment:
+#      KAFKA_BROKERCONNECT: kafka:29092
+#      JVM_OPTS: "-Xms32M -Xmx64M"
+#    networks:
+#      - kafka-postgres-redis-net
+
+  ## --------------------------------- Postgres --------------------------------- ##
+  postgres-db:
+    image: docker.io/postgres:15.3-alpine3.18
+    container_name: postgres-db
+    mem_limit: 1600m
+    command:
+      - "postgres"
+      - "-c"
+      - "max_connections=16"
+    #      - "-p"
+    #      - "6532"
+    environment:
+      POSTGRES_DB: url_shortener
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    volumes:
+      - ./init-script:/docker-entrypoint-initdb.d:Z #скрипты инициализации БД
+      - postgres_data:/var/lib/postgresql/data  # для сохранения в volume
+    #      - ./postgres-data:/var/lib/postgresql/data:Z  # для сохранения данных БД, вариант с host path (если нужен явный контроль)
+    ports:
+      - 6532:5432
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U postgres -d url_shortener" ]
+      #      test: [ "CMD-SHELL", "pg_isready -U postgres -p 6532 -d nsix" ]
+      interval: 10s
+      timeout: 10s
+      retries: 30
+    networks:
+      - kafka-postgres-redis-net
+
+  redis:
+    image: docker.io/redis:7-alpine
+    container_name: redis
+    ports:
+      - 6379:6379
+    command: redis-server --appendonly yes
+    volumes:
+      # Хранение данных Redis в локальной директории ./redis-data. Таким образом, ваши данные будут сохраняться в
+      # локальной папке, и вы не потеряете их, даже если контейнер Redis случайно удалится или вы потеряете к нему доступ.
+      # Главное — обеспечить сохранность данных из папки redis-data.
+      # Или использовать инструкцию volumes и тогда ваши данные будут сохраняться где-то в системе.
+      #- ./redis-data:/data # Optional: for data persistence
+      - redis_data:/data
+    healthcheck:
+      test: [ "CMD", "redis-cli", "ping" ]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    networks:
+      - kafka-postgres-redis-net
+
+  ## --------------------------------- Syngx ---------------------------------- ##
+  #  syngx-check:
+  #    image: docker-release.registry-ci.delta.sbrf.ru/ci04309835/ci04309835/snx/sbel8:syngx-2.3.0-5428-repacked-176
+  #    container_name: syngx-check
+  #    mem_limit: 100m
+  #    depends_on:
+  #      postgres-db:
+  #        condition: service_healthy
+  #    ports:
+  #      - "8181:8181"
+  #    healthcheck:
+  #      test: [ "CMD", "curl", "-f", "http://syngx-check:8181" ]
+  #      interval: 15s
+  #      timeout: 10s
+  #      retries: 50
+  #      start_period: 100s
+  #    volumes:
+  #      - ./syngx/syngx.conf:/opt/syngx/conf/syngx.conf:z
+  #    networks:
+  #      - kafka-postgres-net
+
+  ## --------------------------------- Nginx ---------------------------------- ##
+  #  nginx:
+  #    image: docker.io/nginx:1.19.2-alpine
+  #    hostname: nginx
+  #    volumes:
+  #      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:z
+  #    ports:
+  #      - 9080:9080
+  #    depends_on:
+  #      - minio4
+  #    networks:
+  #      - kafka-postgres-net
+  #    healthcheck:
+  #      test: [ "CMD", "curl", "-f", "http://localhost" ]
+  #      interval: 15s         # Интервал между проверками (по умолчанию 30 секунд)
+  #      timeout: 10s          # Таймаут для выполнения команды (по умолчанию 30 секунд)
+  #      retries: 5            # Количество попыток перед отметкой контейнера как "unhealthy"
+  ##      start_period: 5s      # Время ожидания перед первой проверкой после старта контейнера
+
+
+  ## --------------------------- Zipkin (для трассировки) ---------------------------- ##
+#  zipkin:
+#    image: openzipkin/zipkin:latest
+#    container_name: zipkin
+#    mem_limit: 600M
+#    environment:
+#      - STORAGE_TYPE=mem
+#    #      - STORAGE_TYPE=elasticsearch
+#    #      - ES_HOSTS=http://elasticsearch:9200
+#    ports:
+#      - 9411:9411
+#    networks:
+#      - kafka-postgres-net
+
+networks:
+  kafka-postgres-redis-net:
+    name: kafka-postgres-redis-net
+    driver: bridge
+
+#🎯 Преимущества named volumes:
+# - Автоматическое управление Docker'ом
+# - Лучшая производительность (особенно на Linux)
+# - Проще бэкапы (docker volume export)
+# - Нет проблем с правами доступа
+volumes:
+  postgres_data:
+    name: postgres_data # Для postgres рекомендую named volume
+  kafka_data:
+    name: kafka_data # Для Kafka рекомендую named volume
+  redis_data:
+    name: redis_data # Для Redis рекомендую named volume
