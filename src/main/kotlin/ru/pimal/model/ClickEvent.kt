@@ -1,5 +1,6 @@
 package ru.pimal.model
 
+import com.fasterxml.jackson.annotation.JsonFormat
 import java.time.Instant
 
 /**
@@ -7,5 +8,6 @@ import java.time.Instant
  */
 data class ClickEvent(
     val shortCode: String,
-    val timestamp: Instant
+    @JsonFormat(shape = JsonFormat.Shape.STRING, pattern = "yyyy-MM-dd'T'HH:mm:ss.SSSSSSSSS'Z'", timezone = "UTC")
+    val timestamp: Instant = Instant.now()
 )

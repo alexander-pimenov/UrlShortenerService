@@ -60,9 +60,11 @@ spring:
         spring.json.add.type.headers: false
   # настройки Jackson для Kotlin
   jackson:
-    property-naming-strategy: SNAKE_CASE
+    default-property-inclusion: NON_NULL
+#    property-naming-strategy: SNAKE_CASE # эта настройка делает нейминг полей в json не в camelCase, а в snake_case
     serialization:
       write-dates-as-timestamps: false
+    date-format: com.fasterxml.jackson.databind.util.StdDateFormat  # ISO format
 #Логирование для отладки
 logging:
   level:
