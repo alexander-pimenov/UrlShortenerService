@@ -164,6 +164,34 @@ services:
     networks:
       - kafka-postgres-redis-net
 
+  # RedisInsight - официальный UI
+  redis-insight:
+    image: docker.io/redis/redisinsight:latest
+    container_name: redis-insight
+    ports:
+      - 5540:5540
+    volumes:
+      - redis_insight_data:/db
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - kafka-postgres-redis-net
+
+  # Redis Commander - альтернатива (легковесный)
+  redis-commander:
+    image: docker.io/rediscommander/redis-commander:latest
+    container_name: redis-commander
+    environment:
+      - REDIS_HOSTS=local:redis:6379
+    ports:
+      - 8081:8081
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - kafka-postgres-redis-net
+
   ## --------------------------------- Syngx ---------------------------------- ##
   #  syngx-check:
   #    image: docker-release.registry-ci.delta.sbrf.ru/ci04309835/ci04309835/snx/sbel8:syngx-2.3.0-5428-repacked-176
@@ -236,3 +264,5 @@ volumes:
     name: kafka_data # Для Kafka рекомендую named volume
   redis_data:
     name: redis_data # Для Redis рекомендую named volume
+  redis_insight_data:
+    name: redis_insight_data

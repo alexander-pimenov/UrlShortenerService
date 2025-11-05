@@ -54,10 +54,20 @@ class ConnectionTest(
 
     private fun testRedis() {
         try {
+            // Базовый тест
             redisTemplate.opsForValue().set("connection-test", "success")
             val result = redisTemplate.opsForValue().get("connection-test")
             if (result != null) {
                 println("✅ Redis connected successfully")
+                // Дополнительная информация
+                val info = redisTemplate.execute { connection ->
+                    connection.serverCommands().info("memory")
+                }
+                println("📊 Redis memory info: $info")
+
+                // Посчитать количество закэшированных URL
+                val urlKeys = redisTemplate.keys("url:*")
+                println("📈 Cached URLs in Redis: ${urlKeys.size}")
             } else {
                 println("❌ Redis test failed")
             }

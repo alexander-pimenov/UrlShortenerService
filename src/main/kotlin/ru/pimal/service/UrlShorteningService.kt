@@ -19,6 +19,8 @@ class UrlShorteningService(
     private val kafkaTemplate: KafkaTemplate<String, ClickEvent>,
 ) {
 
+    private val logger = org.slf4j.LoggerFactory.getLogger(this::class.java)
+
     fun createShortUrl(originalUrl: String, ttlHours: Long? = null): ShortUrl {
         val shortCode = generateShortCode()
         val expiresAt = ttlHours?.let { Instant.now().plus(it, ChronoUnit.HOURS) }
@@ -28,27 +30,41 @@ class UrlShorteningService(
             originalUrl = originalUrl,
             expiresAt = expiresAt
         )
-        //Сохраняем в БД
+        // Сохраняем в БД
         val savedUrl = shortUrlRepository.save(shortUrl)
-        //Кэшируем в Redis на 1 час
-        redisTemplate.opsForValue().set(shortCode, originalUrl, 1, TimeUnit.HOURS)
-
+        // Кэшируем в Redis на 1 час
+        // Логируем сохранение в Redis
+        logger.info("💾 Saving to Redis - key: url:$shortCode, value: $originalUrl, TTL: 1 hour")
+        redisTemplate.opsForValue().set(
+            "url:$shortCode",
+            originalUrl,
+            1, TimeUnit.HOURS
+        )
+        logger.info("✅ Successfully saved to Redis")
         return savedUrl
     }
 
     fun redirect(shortCode: String): String {
         // Проверяем кэш Redis
-        val cachedUrl = redisTemplate.opsForValue().get(shortCode)
+        logger.info("🔍 Looking up short code: $shortCode")
+        val cachedUrl = redisTemplate.opsForValue().get("url:$shortCode")
         if (cachedUrl != null) {
+            logger.info("🎯 Redis HIT - Found in cache: $cachedUrl")
             sendClickEvent(shortCode) //Отправляем событие клика в Kafka ассинхронно
             return cachedUrl
         }
         // Если нет в кэше - ищем в БД
+        logger.info("❌ Redis MISS - Not found in cache, querying database")
         val shortUrl = shortUrlRepository.findByShortCode(shortCode)
             ?: throw RuntimeException("Short URL not found in DB")
-        //Обновляем кэш
-        redisTemplate.opsForValue().set(shortCode, shortUrl.originalUrl, 1, TimeUnit.HOURS)
+        // Обновляем кэш
+        logger.info("💾 Updating Redis cache - key: url:$shortCode, value: ${shortUrl.originalUrl}")
+        redisTemplate.opsForValue().set(
+            "url:$shortCode",
+            shortUrl.originalUrl,
+            1, TimeUnit.HOURS)
 
+        logger.info("✅ Redis cache updated")
         sendClickEvent(shortCode) //Отправляем событие клика в Kafka ассинхронно
         return shortUrl.originalUrl
     }

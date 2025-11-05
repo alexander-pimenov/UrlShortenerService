@@ -73,5 +73,6 @@ logging:
     org.springframework.data.redis: INFO
     org.hibernate.SQL: DEBUG
     ru.pimal: INFO
+    io.lettuce.core: INFO
 
 
