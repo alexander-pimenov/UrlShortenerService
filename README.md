@@ -27,3 +27,136 @@
 - `@Component` аннотация автоматически подхватит класс при сканировании
 - `ApplicationRunner` интерфейс гарантирует выполнение кода после запуска приложения
 - Вариант с ApplicationRunner предпочтительнее для тестов подключения, так как гарантирует выполнение после полной инициализации контекста Spring
+
+
+### Механизму автоматической генерации идентификаторов в JPA/Hibernate
+
+### 🔧 Как это работает:
+
+### **1. Аннотация @GeneratedValue**
+
+В вашей сущности `ShortUrl`:
+
+```kotlin
+@Entity
+@Table(name = "short_urls")
+data class ShortUrl(
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)  // ← Вот это ключевая аннотация!
+    val id: Long = 0,
+    // ... остальные поля
+)
+```
+
+### **2. Стратегия GenerationType.IDENTITY**
+
+`GenerationType.IDENTITY` означает, что база данных сама генерирует уникальные ID через **auto-increment** механизм.
+
+**Что происходит в PostgreSQL:**
+- При создании таблицы Hibernate автоматически создает столбец с `SERIAL` или `BIGSERIAL` типом
+- PostgreSQL использует **sequence** (последовательность) для генерации чисел
+- Каждая новая запись получает значение `nextval('sequence_name')`
+
+### **3. Можно посмотреть созданную sequence:**
+
+Подключитесь к БД и выполните:
+```sql
+-- Посмотреть sequences в вашей БД
+SELECT sequence_name FROM information_schema.sequences 
+WHERE sequence_name LIKE '%short_urls%';
+
+-- Обычно создается sequence с именем: short_urls_id_seq
+-- Текущее значение sequence
+SELECT nextval('short_urls_id_seq');
+```
+
+## 🎯 Альтернативные стратегии генерации ID:
+
+### **A. GenerationType.SEQUENCE (для продвинутых сценариев)**
+```kotlin
+@Id
+@GeneratedValue(strategy = GenerationType.SEQUENCE, generator = "short_url_seq")
+@SequenceGenerator(name = "short_url_seq", sequenceName = "short_url_id_seq", allocationSize = 1)
+val id: Long = 0
+```
+
+### **B. GenerationType.TABLE (менее эффективно)**
+```kotlin
+@Id
+@GeneratedValue(strategy = GenerationType.TABLE, generator = "short_url_generator")
+@TableGenerator(name = "short_url_generator", table = "id_generator", pkColumnName = "entity_name", valueColumnName = "next_id")
+val id: Long = 0
+```
+
+### **C. UUID (для распределенных систем)**
+```kotlin
+@Id
+@GeneratedValue(generator = "UUID")
+@GenericGenerator(name = "UUID", strategy = "org.hibernate.id.UUIDGenerator")
+val id: UUID? = null
+```
+
+## 🔍 **Что происходит при сохранении:**
+
+```kotlin
+// 1. Создаем объект БЕЗ ID (id = 0)
+val shortUrl = ShortUrl(
+    shortCode = "abc123", 
+    originalUrl = "https://example.com"
+)
+
+// 2. Сохраняем
+val savedUrl = shortUrlRepository.save(shortUrl)
+
+// 3. Hibernate выполняет:
+//    - INSERT INTO short_urls (short_code, original_url, ...) 
+//      VALUES ('abc123', 'https://example.com', ...)
+//    - PostgreSQL возвращает сгенерированный ID
+//    - Hibernate устанавливает этот ID в объект
+
+println(savedUrl.id) // → 1, 2, 3, ... (автоматически)
+```
+
+## 💡 **Преимущества IDENTITY стратегии:**
+
+- **Простота** - не требует дополнительной конфигурации
+- **Эффективность** - генерация на уровне БД
+- **Гарантированная уникальность** - даже в конкурентной среде
+- **Порядок следования** - ID всегда увеличиваются на 1
+
+## ⚠️ **Особенности работы:**
+
+- **Не batch-able** - нельзя использовать пакетную вставку
+- **ID известен только после коммита** - при откате транзакции ID может "пропасть"
+- **Для высоконагруженных систем** иногда лучше использовать UUID или sequence с allocationSize
+
+## 🚀 **Проверка в вашем проекте:**
+
+Вы можете добавить логирование, чтобы увидеть процесс:
+
+```kotlin
+@Service
+class UrlShorteningService(
+    private val shortUrlRepository: ShortUrlRepository
+) {
+    
+    fun createShortUrl(originalUrl: String): ShortUrl {
+        val shortUrl = ShortUrl(
+            shortCode = generateShortCode(),
+            originalUrl = originalUrl
+        )
+        
+        println("📝 Before save - ID: ${shortUrl.id}") // → 0
+        
+        val savedUrl = shortUrlRepository.save(shortUrl)
+        
+        println("💾 After save - ID: ${savedUrl.id}") // → 1, 2, 3, ...
+        
+        return savedUrl
+    }
+}
+```
+
+**Автоматический и надежный механизм**, который избавляет нас от ручного управления идентификаторами!
+
+---
